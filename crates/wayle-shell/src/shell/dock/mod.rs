@@ -2,6 +2,7 @@ mod adapter;
 mod adapter_hyprland;
 mod event_watcher;
 mod factory;
+mod icon_resolver;
 mod settings;
 mod watchers;
 
@@ -19,8 +20,6 @@ use wayle_config::{
     ConfigProperty,
     schemas::dock::{DockPosition, DockVisibility},
 };
-use wayle_widgets::watch;
-
 use self::watchers::{config, css};
 use crate::shell::services::ShellServices;
 
@@ -226,11 +225,6 @@ impl Component for Dock {
             );
         }
 
-        let pinned_stream = config.dock.pinned_apps.watch();
-        watch!(sender, [pinned_stream], |out| {
-            let _ = out.send(DockCmd::DockItemsChanged);
-        });
-
         css::spawn(&sender, &init.services);
         config::spawn(&sender, &init.services);
 
@@ -306,13 +300,16 @@ impl Component for Dock {
                         root.auto_exclusive_zone_enable();
                         if was_autohide {
                             let dock_size = config.dock.size.get();
-                            let monitor = root.monitor().expect("dock must be on a monitor");
-                            Self::restore_full_size(root, &monitor, self.dock_position, dock_size);
+                            if let Some(monitor) = root.monitor() {
+                                Self::restore_full_size(root, &monitor, self.dock_position, dock_size);
+                            }
                         }
                     }
                     DockVisibility::Autohide => {
                         root.set_exclusive_zone(0);
-                        Self::apply_autohide_sliver(root, &root.monitor().expect("monitor must exist"), self.dock_position);
+                        if let Some(monitor) = root.monitor() {
+                            Self::apply_autohide_sliver(root, &monitor, self.dock_position);
+                        }
                     }
                 }
 
@@ -370,20 +367,15 @@ fn build_dock_items(services: &ShellServices, running: &[DockAppData]) -> Vec<Do
                     is_active: ra.is_active,
                     window_count: ra.window_count,
                 })
+                .or_else(|| Some(DockItemData {
+                    app_id: app_id.clone(),
+                    is_pinned: true,
+                    is_running: false,
+                    is_active: false,
+                    window_count: 0,
+                }))
         })
         .collect();
-
-    for app_id in &pinned {
-        if !running_map.contains_key(app_id.as_str()) {
-            items.push(DockItemData {
-                app_id: app_id.clone(),
-                is_pinned: true,
-                is_running: false,
-                is_active: false,
-                window_count: 0,
-            });
-        }
-    }
 
     for app in running.iter() {
         if !pinned_set.contains(app.app_id.as_str()) {
@@ -405,16 +397,8 @@ fn build_adapter(services: &ShellServices) -> Option<DockAdapterRef> {
         Some(DockAdapterRef::Niri(
             crate::shell::dock::adapter::NiriDockAdapter::new(niri.clone()),
         ))
-    } else if let Some(ref hyprland) = services.hyprland {
-        Some(DockAdapterRef::Hyprland(
-            crate::shell::dock::adapter_hyprland::HyprlandDockAdapter::new(hyprland.clone()),
-        ))
     } else {
-        services.hyprland.as_ref().map(|hyprland| {
-            DockAdapterRef::Hyprland(
-                crate::shell::dock::adapter_hyprland::HyprlandDockAdapter::new(hyprland.clone()),
-            )
-        })
+        None
     }
 }
 
@@ -568,6 +552,9 @@ impl Dock {
             --dock-item-unpinned-opacity: 0.7; \
             --dock-active-border-width: {active_border_width}px; \
             --dock-active-border-color: {active_border_color}; \
+            --dock-item-hover-bg: color-mix(in srgb, var(--bg-overlay) 50%, transparent); \
+            --dock-item-hover-border: var(--border-subtle); \
+            --dock-popover-bg: var(--bg-elevated); \
             }}"
         )
     }
@@ -598,11 +585,18 @@ impl Dock {
             })
             .collect();
 
-        let mut guard = self.items.guard();
-        guard.clear();
+        let old_count = self.items.len();
+        debug!(old_count, "rebuild_all_items START");
+        *self.open_popover.borrow_mut() = None;
+        debug!("rebuild_all_items tracker cleared");
 
-        for item in new_items {
-            guard.push_back(item);
+        {
+            let mut guard = self.items.guard();
+            debug!("rebuild_all_items clearing items");
+            guard.clear();
+            for item in new_items {
+                guard.push_back(item);
+            }
         }
     }
 
@@ -738,9 +732,10 @@ impl Dock {
 
         let config = self.services.config.config();
         let dock_size = config.dock.size.get();
-        let monitor = root.monitor().expect("dock must be on a monitor");
-        Self::restore_full_size(root, &monitor, self.dock_position, dock_size);
-        root.remove_css_class("autohide");
+        if let Some(monitor) = root.monitor() {
+            Self::restore_full_size(root, &monitor, self.dock_position, dock_size);
+            root.remove_css_class("autohide");
+        }
     }
 
     fn leave_hover(&mut self, root: &gtk::Window) {
@@ -752,9 +747,10 @@ impl Dock {
         }
         self.hover_active = false;
 
-        let monitor = root.monitor().expect("dock must be on a monitor");
-        let position = self.dock_position;
-        Self::apply_autohide_sliver(root, &monitor, position);
-        root.add_css_class("autohide");
+        if let Some(monitor) = root.monitor() {
+            let position = self.dock_position;
+            Self::apply_autohide_sliver(root, &monitor, position);
+            root.add_css_class("autohide");
+        }
     }
 }

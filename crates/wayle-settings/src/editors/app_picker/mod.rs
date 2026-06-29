@@ -159,8 +159,8 @@ pub(super) fn build_factory(
         list_item.set_child(Some(&box_));
     });
 
-    let pinned_apps = pinned_apps.clone();
-    let lookup = lookup.clone();
+      let pinned_apps = pinned_apps.clone();
+    let lookup = Rc::new(lookup);
 
     factory.connect_bind(move |_factory, list_item| {
         let Some(list_item) = list_item.downcast_ref::<gtk::ListItem>() else {
@@ -209,7 +209,9 @@ pub(super) fn build_factory(
         let pinned_badge = children.get(idx).and_then(|c| c.downcast_ref::<gtk::Label>());
         if let Some(pinned_badge) = pinned_badge {
             let is_pinned = lookup.app_ids.get(&display_name)
-                .map(|aid| pinned_apps.borrow().contains(aid))
+                .and_then(|aid| {
+                    pinned_apps.try_borrow().ok().map(|p| p.contains(aid))
+                })
                 .unwrap_or(false);
             pinned_badge.set_visible(is_pinned);
         }
@@ -223,16 +225,9 @@ pub(crate) struct AppPickerControl {
     /// The config property being edited.
     property: ConfigProperty<Vec<String>>,
     /// Underlying string list of all app display names.
-    string_list: gtk::StringList,
     /// Filter for search queries.
     filter: gtk::StringFilter,
-    /// Filtered model backing the ListView.
-    filter_model: gtk::FilterListModel,
-    /// Search entry widget.
-    search_entry: gtk::SearchEntry,
-    /// List view widget.
-    list_view: gtk::ListView,
-    /// Currently pinned apps (display names) for factory + activation.
+    /// Currently pinned app_ids for factory + activation.
     pinned_apps: Rc<RefCell<HashSet<String>>>,
     /// Container holding pinned app chips.
     pinned_container: gtk::Box,
@@ -249,6 +244,7 @@ pub(crate) enum AppPickerMsg {
     /// User typed in search box.
     SearchChanged(String),
     /// User clicked a list row (position from connect_activate).
+    #[allow(dead_code)]
     Activated(u32),
     /// External property change — sync UI.
     Refresh,
@@ -258,8 +254,7 @@ pub(crate) enum AppPickerMsg {
 pub(crate) struct AppPickerInit {
     /// The config property being edited.
     pub(super) property: ConfigProperty<Vec<String>>,
-    /// Dirty badge label from the parent row.
-    pub(super) pinned_badge: gtk::Label,
+ 
 }
 
 impl SimpleComponent for AppPickerControl {
@@ -345,7 +340,7 @@ impl SimpleComponent for AppPickerControl {
         let prop_for_activate = init.property.clone();
         let lookup_for_activate = lookup.clone();
         let filter_model_for_activate = filter_model.clone();
-        list_view.connect_activate(move |_list_view, position| {
+        let _activate_handler = list_view.connect_activate(move |_list_view, position| {
             let Some(item) = filter_model_for_activate.item(position).and_downcast::<gtk::StringObject>()
             else {
                 return;
@@ -356,7 +351,6 @@ impl SimpleComponent for AppPickerControl {
                 return;
             };
 
-            let app_ids: Vec<String>;
             {
                 let mut pinned = pinned_for_activate.borrow_mut();
                 if pinned.contains(app_id) {
@@ -364,9 +358,8 @@ impl SimpleComponent for AppPickerControl {
                 } else {
                     pinned.insert(app_id.clone());
                 }
-                app_ids = pinned.iter().cloned().collect();
+                prop_for_activate.set(pinned.iter().cloned().collect::<Vec<_>>());
             }
-            prop_for_activate.set(app_ids);
         });
 
         let input_sender = sender.input_sender().clone();
@@ -376,11 +369,7 @@ impl SimpleComponent for AppPickerControl {
 
         let model = Self {
             property: init.property,
-            string_list,
             filter,
-            filter_model,
-            search_entry,
-            list_view,
             pinned_apps,
             pinned_container,
             lookup,
@@ -400,7 +389,9 @@ impl SimpleComponent for AppPickerControl {
                 self.filter.set_search(Some(&query));
             }
 
-            AppPickerMsg::Activated(_position) => {}
+            AppPickerMsg::Activated(_position) => {
+                // Activation is handled by `connect_activate` callback above.
+            }
 
             AppPickerMsg::Refresh => {
                 let pinned: Vec<String> = self.property.get();
@@ -461,13 +452,11 @@ impl AppPickerControl {
         let pinned_apps = Rc::clone(&self.pinned_apps);
         let prop = self.property.clone();
         remove_btn.connect_clicked(move |_btn| {
-            let app_ids: Vec<String>;
             {
                 let mut pinned = pinned_apps.borrow_mut();
                 pinned.remove(&app_id_clone);
-                app_ids = pinned.iter().cloned().collect();
+                prop.set(pinned.iter().cloned().collect::<Vec<_>>());
             }
-            prop.set(app_ids);
         });
         chip.append(&remove_btn);
 
