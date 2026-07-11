@@ -48,4 +48,5 @@ pub(crate) enum AvailableNetworksOutput {
     ClearConnecting,
     Connected,
     ConnectionFailed(String),
+    ListIsEmpty(bool),
 }
