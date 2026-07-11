@@ -14,6 +14,7 @@ pub(crate) struct NetworkDropdownInit {
 pub(crate) enum NetworkDropdownMsg {
     WifiToggled(bool),
     ScanRequested,
+    VisibilityChanged(bool),
     AvailableNetworks(AvailableNetworksOutput),
 }
 

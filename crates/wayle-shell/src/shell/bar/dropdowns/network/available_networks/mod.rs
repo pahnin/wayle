@@ -190,6 +190,8 @@ impl Component for AvailableNetworks {
 
         model.rebuild_network_list(None);
 
+        let _ = sender.output(AvailableNetworksOutput::ListIsEmpty(model.ap_cache.is_empty()));
+
         let password_form_widget = model.password_form.widget();
         let network_list_widget = model.network_list.widget();
 
@@ -233,6 +235,8 @@ impl Component for AvailableNetworks {
 
                 self.rebuild_network_list(connected_ssid.as_deref());
 
+                let _ = sender.output(AvailableNetworksOutput::ListIsEmpty(self.ap_cache.is_empty()));
+
                 if self.state == ListState::Scanning && !self.ap_cache.is_empty() {
                     self.state = ListState::Normal;
 
@@ -244,6 +248,8 @@ impl Component for AvailableNetworks {
 
                 let connected_ssid = self.network.wifi.get().and_then(|wifi| wifi.ssid.get());
                 self.rebuild_network_list(connected_ssid.as_deref());
+
+                let _ = sender.output(AvailableNetworksOutput::ListIsEmpty(self.ap_cache.is_empty()));
             }
             AvailableNetworksCmd::ConnectionProgress(step) => {
                 let _ = sender.output(AvailableNetworksOutput::ConnectionProgress(step));

@@ -34,6 +34,7 @@ pub(crate) struct NetworkDropdown {
     wifi_enabled: bool,
     wifi_available: bool,
     scanning: bool,
+    list_is_empty: bool,
     active_connections: Controller<ActiveConnections>,
     available_networks: Controller<AvailableNetworks>,
     wifi_watcher: WatcherToken,
@@ -130,7 +131,7 @@ impl Component for NetworkDropdown {
 
     fn init(
         init: Self::Init,
-        _root: Self::Root,
+        root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let active_connections = ActiveConnections::builder()
@@ -160,12 +161,18 @@ impl Component for NetworkDropdown {
             wifi_enabled,
             wifi_available,
             scanning: false,
+            list_is_empty: true,
             active_connections,
             available_networks,
             wifi_watcher: WatcherToken::new(),
         };
 
         model.reset_wifi_watchers(&sender);
+
+        let input_sender = sender.input_sender().clone();
+        root.connect_visible_notify(move |popover| {
+            input_sender.emit(NetworkDropdownMsg::VisibilityChanged(popover.is_visible()));
+        });
 
         let active_connections_widget = model.active_connections.widget();
         let available_networks_widget = model.available_networks.widget();
@@ -174,7 +181,7 @@ impl Component for NetworkDropdown {
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, root: &Self::Root) {
         match msg {
             NetworkDropdownMsg::WifiToggled(active) => {
                 self.toggle_wifi(active, &sender);
@@ -183,6 +190,12 @@ impl Component for NetworkDropdown {
                 self.available_networks
                     .emit(AvailableNetworksInput::ScanRequested);
             }
+            NetworkDropdownMsg::VisibilityChanged(visible) => {
+                if visible && self.list_is_empty && !self.scanning && self.wifi_available && self.wifi_enabled {
+                    self.available_networks
+                        .emit(AvailableNetworksInput::ScanRequested);
+                }
+            }
             NetworkDropdownMsg::AvailableNetworks(output) => match output {
                 AvailableNetworksOutput::ScanStarted => {
                     self.scanning = true;
@@ -190,6 +203,10 @@ impl Component for NetworkDropdown {
 
                 AvailableNetworksOutput::ScanComplete => {
                     self.scanning = false;
+                }
+
+                AvailableNetworksOutput::ListIsEmpty(is_empty) => {
+                    self.list_is_empty = is_empty;
                 }
 
                 AvailableNetworksOutput::Connecting(ssid) => {
@@ -227,7 +244,7 @@ impl Component for NetworkDropdown {
         &mut self,
         msg: NetworkDropdownCmd,
         sender: ComponentSender<Self>,
-        _root: &Self::Root,
+        root: &Self::Root,
     ) {
         match msg {
             NetworkDropdownCmd::ScaleChanged(scale) => {
